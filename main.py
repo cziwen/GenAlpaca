@@ -167,7 +167,7 @@ def main():
                     qa_count = done_future.result()
                     total_qa_count += qa_count
                     completed_batches += 1
-                    logging.info(f"批次 {batch_id} 完成，生成 {qa_count} 个QA")
+                    # logging.info(f"批次 {batch_id} 完成，生成 {qa_count} 个QA")
                     
                     # 保存已完成的文件到进度文件
                     for file_path in batch_files:
@@ -203,7 +203,17 @@ def main():
         
         print()  # 进度条完成后换行
         logging.info(f"Pipeline finished, total items: {total_qa_count}")
-        logging.info(f"进度已保存到: {saves_file}")
+        
+        # 正常结束时删除进度文件（除非是resume模式）
+        if not args.resume and os.path.exists(saves_file):
+            try:
+                os.remove(saves_file)
+                logging.info(f"已删除进度文件: {saves_file}")
+            except Exception as e:
+                logging.warning(f"删除进度文件失败: {e}")
+        else:
+            logging.info(f"进度已保存到: {saves_file}")
+        
         logging.info("=== End ===")
         
     except Exception as e:
