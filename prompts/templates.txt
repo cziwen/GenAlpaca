@@ -1,0 +1,63 @@
+Please read the following complete financial report text, then generate up to {max_q} high-quality questions focusing on content depth and business insights. Return as a JSON list, each element containing:
+- "instruction": the question
+- "input": context in English
+- "output": detailed answer to the question
+
+Full Report:
+{report_text}
+---
+Please analyze the following financial report and generate up to {max_q} high-quality questions focusing on business insights and financial depth. Return as a JSON list, each element containing:
+- "instruction": the question
+- "input": context in English
+- "output": detailed answer to the question
+
+Report content:
+{report_text}
+---
+Based on the following financial report content, please generate {max_q} professional questions from the perspectives of financial analysis, risk identification, and investment value, and provide detailed answers. Return in JSON format, each question containing:
+- "instruction": analysis question
+- "input": relevant background information
+- "output": professional analysis answer
+
+Financial Report Text:
+{report_text}
+---
+Analyze the provided financial report comprehensively and create {max_q} insightful questions covering key financial metrics, potential risks, and investment opportunities. Format as JSON with:
+- "instruction": analysis question
+- "input": relevant context
+- "output": comprehensive analysis
+
+Financial report:
+{report_text}
+---
+Please carefully study this financial report and generate {max_q} in-depth analysis questions from the dimensions of strategic development, market competition, and financial health, and answer them one by one. Return in JSON format, containing:
+- "instruction": strategic analysis question
+- "input": analysis background
+- "output": in-depth analysis results
+
+Report content:
+{report_text}
+---
+Examine this financial report thoroughly and formulate {max_q} strategic questions about business performance, market position, and future prospects. Provide detailed analysis in JSON format:
+- "instruction": strategic question
+- "input": analysis context
+- "output": strategic insights
+
+Report:
+{report_text}
+---
+From an investor's perspective, analyze this financial report and ask {max_q} critical questions about profitability, growth potential, and risk factors. Provide professional analysis in JSON:
+- "instruction": investment question
+- "input": investment context
+- "output": investment analysis
+
+Financial report:
+{report_text}
+---
+From an investor's perspective, analyze this financial report and ask {max_q} critical questions about profitability, growth potential, and risk factors. Provide professional analysis in JSON:
+- "instruction": investment question
+- "input": investment context
+- "output": investment analysis
+
+Financial report:
+{report_text} 

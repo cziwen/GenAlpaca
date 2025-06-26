@@ -1,0 +1,37 @@
+# OpenAI API配置
+openai_api_key: "${OPENAI_API_KEY}"
+
+# 主要模型设置
+model: "gpt-4o"
+temperature: 0.7
+max_tokens: 4096
+
+# 摘要方式设置
+# 可选值: "tfidf", "gpt", "tfidf_gpt"
+summary_method: "gpt"
+
+# 摘要模型设置
+summary_model: "gpt-4o-mini"
+summary_max_tokens: 2048
+summary_temperature: 0.3
+max_chunk_size: 100000 # 按照字符数分块
+
+# 批量处理设置
+use_batch_processing: true
+max_workers: 8  # 进程池大小
+batch_size: 5  # 每批处理的任务数量
+max_tokens_per_worker: 50000  # 每个worker处理的最大token数
+
+# 内容提取设置
+top_k_sentences: 50
+max_questions: 1
+
+# 文件路径
+input_dir: "data/raw"
+output_file: "output/report_qa.jsonl"
+log_file: "output/logs.txt"
+prompt_templates_file: "prompts/templates.txt"
+
+# 重试设置
+retry_attempts: 2
+retry_backoff: 2
