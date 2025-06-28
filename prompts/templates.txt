@@ -31,7 +31,7 @@ Financial report:
 {report_text}
 ---
 Please carefully study this financial report and generate {max_q} in-depth analysis questions from the dimensions of strategic development, market competition, and financial health, and answer them one by one. Return in JSON format, containing:
-- "instruction": strategic analysis question
+- "instruction": analysis question
 - "input": analysis background
 - "output": in-depth analysis results
 
@@ -46,18 +46,59 @@ Examine this financial report thoroughly and formulate {max_q} strategic questio
 Report:
 {report_text}
 ---
-From an investor's perspective, analyze this financial report and ask {max_q} critical questions about profitability, growth potential, and risk factors. Provide professional analysis in JSON:
-- "instruction": investment question
+From an investor's perspective, analyze this financial report and ask {max_q} critical investment questions about profitability, growth potential, and risk factors. Provide professional analysis in JSON:
+- "instruction": the question(s)
 - "input": investment context
 - "output": investment analysis
 
 Financial report:
 {report_text}
 ---
-From an investor's perspective, analyze this financial report and ask {max_q} critical questions about profitability, growth potential, and risk factors. Provide professional analysis in JSON:
-- "instruction": investment question
-- "input": investment context
-- "output": investment analysis
+Please analyze the following financial report and raise {max_q} ESG-related questions, focusing on environmental impact, corporate social responsibility, and governance practices. Format the output as JSON with:
+- "instruction": ESG-related question
+- "input": context extracted from the report
+- "output": analytical insights with reference to ESG standards
+
+Report:
+{report_text}
+---
+Read the financial report below and generate {max_q} red-flag questions that might indicate potential financial misstatement or manipulation. Base your questions on suspicious metrics, inconsistencies, or overly optimistic projections. Return as JSON:
+- "instruction": red-flag question
+- "input": suspicious section of the report
+- "output": reasoning and risk evaluation
+
+Full Report:
+{report_text}
+---
+Based on the financial report provided, formulate {max_q} comparative questions between this company and industry peers. Focus on performance gaps, strategic advantages, or cost structures. Format in JSON:
+- "instruction": comparative question
+- "input": relevant financial or strategic detail
+- "output": comparative analysis and industry benchmarking
+
+Report content:
+{report_text}
+---
+Please raise {max_q} questions exploring how macroeconomic conditions (e.g., inflation, interest rates, trade policy) affect the financial performance and strategy described in the report. Provide answers based on inferred economic exposure. Output as JSON:
+- "instruction": macroeconomic impact question
+- "input": inferred macro-related context
+- "output": impact analysis
+
+Report:
+{report_text}
+---
+Carefully examine the financial report and raise {max_q} questions focusing on potential operational, regulatory, or market risks. For each, provide a detailed answer suggesting potential mitigation strategies. Return in JSON:
+- "instruction": the question(s)
+- "input": risk-relevant report section
+- "output": mitigation analysis
 
 Financial report:
-{report_text} 
+{report_text}
+---
+Review the financial report and management discussion to raise {max_q} questions about alignment between stated corporate strategy and actual financial performance. Format as JSON:
+- "instruction": the question(s)
+- "input": excerpt from MD&A or strategic section
+- "output": consistency analysis
+
+Full report:
+{report_text}
+---

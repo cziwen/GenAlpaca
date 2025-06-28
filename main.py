@@ -1,15 +1,56 @@
 import os
 import yaml
 import logging
-import json
-import time
 import argparse
-from typing import List, Dict, Any, Set
+import sys
+import threading
+from typing import Dict, Any, Set
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+from datetime import datetime
 
-from api.batch_processor import process_batch
+from api.processor import process_single_file
 from utils.logger import setup_logging
+
+# 全局API失败计数器
+_api_failure_count = 0
+_api_failure_lock = threading.Lock()
+_api_failure_threshold = 5  # 默认连续失败5次后终止
+
+
+def get_api_failure_count() -> int:
+    """获取API失败次数"""
+    global _api_failure_count
+    with _api_failure_lock:
+        return _api_failure_count
+
+
+def increment_api_failure_count():
+    """增加API失败次数"""
+    global _api_failure_count
+    with _api_failure_lock:
+        _api_failure_count += 1
+        logging.warning(f"API调用失败，当前连续失败次数: {_api_failure_count}")
+
+
+def reset_api_failure_count():
+    """重置API失败次数"""
+    global _api_failure_count
+    with _api_failure_lock:
+        _api_failure_count = 0
+
+
+def set_api_failure_threshold(threshold: int):
+    """设置API失败阈值"""
+    global _api_failure_threshold
+    _api_failure_threshold = threshold
+
+
+def should_terminate() -> bool:
+    """检查是否应该终止程序"""
+    return get_api_failure_count() >= _api_failure_threshold
+
 
 def load_config(path: str = "config/config.yaml") -> Dict[str, Any]:
     """加载配置文件，支持环境变量替换"""
@@ -17,66 +58,74 @@ def load_config(path: str = "config/config.yaml") -> Dict[str, Any]:
         config = yaml.safe_load(f)
     
     # 替换环境变量
-    if isinstance(config.get('openai_api_key'), str) and config['openai_api_key'].startswith('${'):
-        env_var = config['openai_api_key'][2:-1]  # 移除 ${}
-        config['openai_api_key'] = os.getenv(env_var)
-        if not config['openai_api_key']:
-            raise ValueError(f"环境变量 {env_var} 未设置")
+    for key in ['openai_api_key', 'deepseek_api_key']:
+        if isinstance(config.get(key), str) and config[key].startswith('${'):
+            env_var = config[key][2:-1]  # 移除 ${}
+            config[key] = os.getenv(env_var)
+    
+    if not (config.get('openai_api_key') or config.get('deepseek_api_key')):
+        raise ValueError("openai_api_key 和 deepseek_api_key 至少需要设置一个")
     
     return config
 
-def print_progress_bar(current: int, total: int, prefix: str = "Progress", length: int = 50):
-    """打印进度条"""
-    filled_length = int(length * current // total)
-    bar = '█' * filled_length + '-' * (length - filled_length)
-    percent = current / total * 100
-    print(f'\r{prefix}: |{bar}| {current}/{total} ({percent:.1f}%)', end='', flush=True)
-    if current == total:
-        print()  # 换行
+def create_backup_dir() -> str:
+    """创建带时间戳的备份目录"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = f"output/{timestamp}"
+    os.makedirs(backup_dir, exist_ok=True)
+    return backup_dir
 
-def load_completed_files(saves_file: str) -> Set[str]:
+def load_completed_files(progress_file: str) -> Set[str]:
     """加载已完成的文件列表"""
-    if not os.path.exists(saves_file):
+    if not os.path.exists(progress_file):
         return set()
     
     try:
-        with open(saves_file, 'r', encoding='utf-8') as f:
+        with open(progress_file, 'r', encoding='utf-8') as f:
             completed_files = set(line.strip() for line in f if line.strip())
         return completed_files
     except Exception as e:
         logging.warning(f"读取进度文件失败: {e}")
         return set()
 
-def save_completed_files(saves_file: str, completed_files: Set[str]):
-    """保存已完成的文件列表"""
-    try:
-        with open(saves_file, 'w', encoding='utf-8') as f:
-            for file_name in sorted(completed_files):
-                f.write(f"{file_name}\n")
-    except Exception as e:
-        logging.error(f"保存进度文件失败: {e}")
-
-def get_file_batch_key(file_paths: List[Path]) -> str:
-    """生成批次标识符"""
-    return ",".join(sorted(str(f.name) for f in file_paths))
+def get_backup_dir_from_progress(progress_file: str) -> str:
+    """从进度文件路径推断出备份目录"""
+    return os.path.dirname(progress_file)
 
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='Financial Report QA Generator')
-    parser.add_argument('-r', '--resume', type=str, help='Resume from saves file')
+    parser.add_argument('-r', '--resume', type=str, help='Resume from progress file')
     args = parser.parse_args()
     
     try:
+        # 创建或获取备份目录
+        if args.resume:
+            backup_dir = get_backup_dir_from_progress(args.resume)
+            print(f"Resume模式：使用原备份目录: {backup_dir}")
+        else:
+            backup_dir = create_backup_dir()
+            print(f"备份目录: {backup_dir}")
+        
         # 加载配置
         config = load_config()
+        
+        # 设置API失败阈值
+        api_failure_threshold = config.get('api_failure_threshold', 5)
+        set_api_failure_threshold(api_failure_threshold)
+        
+        # 更新配置文件中的路径到备份目录
+        config['output_file'] = os.path.join(backup_dir, 'result.jsonl')
+        config['log_file'] = os.path.join(backup_dir, 'logs.txt')
         
         # 设置日志
         setup_logging(config['log_file'])
         
-        if os.path.exists(config['log_file']): # 清空上次日志文件
-            os.remove(config['log_file'])
-
         logging.info("=== Report QA Pipeline Start ===")
+        logging.info(f"备份目录: {backup_dir}")
+        
+        # 显示API失败阈值配置
+        logging.info(f"API失败阈值设置为: {api_failure_threshold} 次连续失败后自动终止")
         
         # 检查输入目录
         input_dir = Path(config['input_dir'])
@@ -106,118 +155,113 @@ def main():
         logging.info(f"找到 {len(file_list)} 个文件，剩余 {len(remaining_files)} 个待处理")
         
         # 配置参数
-        batch_size = config.get('batch_size', 2)  # 每个进程处理的文本数量
-        max_workers = config.get('max_workers', 4)  # 最大进程数
+        max_workers = config.get('max_workers', 20)
+        zero_qa_threshold = config.get('api_failure_threshold', 5)
+        zero_qa_count = 0
         
-        # 计算总批次数
-        total_batches = (len(remaining_files) + batch_size - 1) // batch_size
-        logging.info(f"总共 {total_batches} 个批次，最多使用 {max_workers} 个worker")
+        logging.info(f"使用 {max_workers} 个线程并发处理")
         
         # 准备输出文件
         output_path = Path(config['output_file'])
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 准备进度文件
-        saves_file = args.resume if args.resume else "output/saves.txt"
+        progress_file = args.resume if args.resume else os.path.join(backup_dir, 'progress.txt')
         
         # 清空输出文件（仅在非resume模式）
         if not args.resume:
             with open(output_path, 'w', encoding='utf-8') as f:
                 pass
         
-        # 滚动窗口式处理
+        # 使用线程池处理每个文件
         total_qa_count = 0
-        completed_batches = 0
         
-        print(f"开始处理 {len(remaining_files)} 个文件，共 {total_batches} 个批次...")
+        print(f"开始处理 {len(remaining_files)} 个文件...")
         
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # 提交第一批任务
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {}
-            current_batch = 0
             
-            # 初始提交任务
-            for i in range(0, min(max_workers * batch_size, len(remaining_files)), batch_size):
-                batch_files = remaining_files[i:i+batch_size]
-                batch_texts = []
-                
-                for file_path in batch_files:
-                    try:
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            text = f.read().strip()
-                        if text:
-                            batch_texts.append(text)
-                    except Exception as e:
-                        logging.error(f"读取文件失败 {file_path}: {e}")
-                
-                if batch_texts:
-                    current_batch += 1
-                    future = executor.submit(process_batch, batch_texts, config, current_batch, str(output_path))
-                    futures[future] = (current_batch, batch_files)
-            
-            # 处理完成的任务并提交新任务
-            file_index = len(futures) * batch_size
-            
-            while futures:
-                # 等待一个任务完成
-                done_future = next(as_completed(futures.keys()))
-                batch_id, batch_files = futures.pop(done_future)
-                
+            # 提交所有文件处理任务
+            for file_path in remaining_files:
                 try:
-                    qa_count = done_future.result()
-                    total_qa_count += qa_count
-                    completed_batches += 1
-                    # logging.info(f"批次 {batch_id} 完成，生成 {qa_count} 个QA")
-                    
-                    # 保存已完成的文件到进度文件
-                    for file_path in batch_files:
-                        completed_files.add(file_path.name)
-                    save_completed_files(saves_file, completed_files)
-                    
-                    # 更新进度条
-                    print_progress_bar(completed_batches, total_batches, "处理进度")
-                    
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        text = f.read().strip()
+                    if text:
+                        future = executor.submit(
+                            process_single_file,
+                            text,
+                            file_path.name,
+                            config,
+                            str(output_path),
+                            progress_file
+                        )
+                        futures[future] = file_path.name
                 except Exception as e:
-                    logging.error(f"批次 {batch_id} 处理失败: {e}")
-                
-                # 提交新任务（如果还有文件）
-                if file_index < len(remaining_files):
-                    batch_files = remaining_files[file_index:file_index + batch_size]
-                    batch_texts = []
-                    
-                    for file_path in batch_files:
-                        try:
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                text = f.read().strip()
-                            if text:
-                                batch_texts.append(text)
-                        except Exception as e:
-                            logging.error(f"读取文件失败 {file_path}: {e}")
-                    
-                    if batch_texts:
-                        current_batch += 1
-                        future = executor.submit(process_batch, batch_texts, config, current_batch, str(output_path))
-                        futures[future] = (current_batch, batch_files)
-                    
-                    file_index += batch_size
+                    logging.error(f"读取文件失败 {file_path}: {e}")
+            
+            # 用tqdm进度条包裹文件处理
+            with tqdm(total=len(futures), desc="处理进度", ncols=80) as pbar:
+                for future in as_completed(futures):
+                    file_name = futures[future]
+                    try:
+                        # 检查API失败状态
+                        if should_terminate():
+                            failure_count = get_api_failure_count()
+                            logging.critical(f"检测到API连续失败{failure_count}次，达到阈值{api_failure_threshold}，程序终止！")
+                            print(f"\n❌ API连续失败{failure_count}次，程序自动终止！")
+                            sys.exit(1)
+                        
+                        qa_count = future.result()
+                        # 成功处理，重置API失败计数
+                        reset_api_failure_count()
+                        total_qa_count += qa_count
+                        pbar.update(1)
+                        
+                        # QA写入检查
+                        if qa_count == 0:
+                            zero_qa_count += 1
+                            logging.warning(f"文件 {file_name} 未生成QA，连续未生成次数: {zero_qa_count}")
+                            if zero_qa_count >= zero_qa_threshold:
+                                logging.critical(f"连续{zero_qa_threshold}个文件未生成QA，程序主动中断！")
+                                print(f"\n❌ 连续{zero_qa_threshold}个文件未生成QA，程序终止！")
+                                raise RuntimeError(f"连续{zero_qa_threshold}个文件未生成QA，程序主动中断！")
+                        else:
+                            zero_qa_count = 0
+                            
+                    except RuntimeError as e:
+                        if "API调用失败" in str(e):
+                            # API失败，增加失败计数
+                            increment_api_failure_count()
+                            logging.error(f"文件 {file_name} API调用失败: {e}")
+                            
+                            if should_terminate():
+                                failure_count = get_api_failure_count()
+                                logging.critical(f"API连续失败{failure_count}次，达到阈值{api_failure_threshold}，程序终止！")
+                                print(f"\n❌ API连续失败{failure_count}次，程序自动终止！")
+                                sys.exit(1)
+                        else:
+                            logging.error(f"文件 {file_name} 处理失败: {e}")
+                    except Exception as e:
+                        logging.error(f"文件 {file_name} 处理失败: {e}")
         
-        print()  # 进度条完成后换行
         logging.info(f"Pipeline finished, total items: {total_qa_count}")
-        
-        # 正常结束时删除进度文件（除非是resume模式）
-        if not args.resume and os.path.exists(saves_file):
+        if not args.resume and os.path.exists(progress_file):
             try:
-                os.remove(saves_file)
-                logging.info(f"已删除进度文件: {saves_file}")
+                os.remove(progress_file)
+                logging.info(f"已删除进度文件: {progress_file}")
             except Exception as e:
                 logging.warning(f"删除进度文件失败: {e}")
         else:
-            logging.info(f"进度已保存到: {saves_file}")
-        
+            logging.info(f"进度已保存到: {progress_file}")
         logging.info("=== End ===")
         
+    except KeyboardInterrupt:
+        logging.info("用户中断程序")
+        print("\n⚠️ 程序被用户中断")
+        sys.exit(0)
     except Exception as e:
         logging.error(f"程序执行失败: {e}")
+        print(f"\n❌ 程序执行失败: {e}")
         raise
 
 if __name__ == "__main__":
