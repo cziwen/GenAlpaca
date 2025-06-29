@@ -58,65 +58,13 @@ def split_text_into_sentences(text: str) -> List[str]:
     text = re.sub(r'\n+', ' ', text)
     text = re.sub(r' +', ' ', text)
     
-    # 定义需要保护的模式
-    protected_patterns = [
-        # 数字模式
-        r'\$\d+(?:,\d{3})*(?:\.\d+)?',      # $1,234.56, $1.23
-        r'\d+(?:,\d{3})*(?:\.\d+)?%',       # 12.34%, 1.000%, 5%
-        r'\d+(?:,\d{3})*(?:\.\d+)?',        # 1,234.56, 1.23, 123
-        r'\d+\.\d+',                        # 12.34, 1.000
-        r'\d+',                             # 123, 1
-        
-        # 日期模式
-        r'\d{1,2}/\d{1,2}/\d{2,4}',        # 12/31/2023, 1/1/24
-        r'\d{4}-\d{1,2}-\d{1,2}',          # 2023-12-31
-        r'\w+ \d{1,2},? \d{4}',            # December 31, 2023
-        
-        # 时间模式
-        r'\d{1,2}:\d{2}(?::\d{2})?(?: [AP]M)?',  # 12:30, 12:30:45, 12:30 PM
-        
-        # 百分比和比率
-        r'\d+(?:\.\d+)?x',                  # 2.5x, 10x
-        r'\d+(?:\.\d+)?%',                  # 25%, 12.5%
-        
-        # 货币和金额
-        r'\$\d+(?:,\d{3})*(?:\.\d+)?',      # $1,234.56
-        r'\d+(?:,\d{3})*(?:\.\d+)? dollars', # 1,234.56 dollars
-        
-        # 股票代码
-        r'[A-Z]{1,5}',                      # AAPL, GOOGL
-        
-        # 年份
-        r'\b(?:19|20)\d{2}\b',              # 1999, 2023
-        
-        # 季度
-        r'Q[1-4]',                          # Q1, Q2, Q3, Q4
-        r'\d{4} Q[1-4]',                    # 2023 Q1
-        
-        # 财务术语
-        r'EBITDA', r'ROI', r'ROE', r'P/E', r'P/E ratio',
-        r'earnings per share', r'EPS',
-        r'revenue', r'profit', r'loss',
-        r'assets', r'liabilities', r'equity',
-        
-        # 公司名称模式
-        r'[A-Z][a-z]+ (?:Inc\.|Corp\.|LLC|Ltd\.)',
-        r'[A-Z][a-z]+ & [A-Z][a-z]+',
-    ]
+    # 使用更简单但有效的方法来保护数字中的小数点
+    # 临时替换数字中的小数点，避免被误切
+    text = re.sub(r'(\d+)\.(\d+)', r'\1__DECIMAL__\2', text)
     
-    # 临时替换需要保护的模式
-    protected_map = {}
-    for i, pattern in enumerate(protected_patterns):
-        matches = re.finditer(pattern, text, re.IGNORECASE)
-        for j, match in enumerate(matches):
-            placeholder = f"__PROTECTED_{i}_{j}__"
-            protected_map[placeholder] = match.group()
-            text = text[:match.start()] + placeholder + text[match.end():]
-    
-    # 句子分割模式
+    # 句子分割模式 - 更精确的匹配
     sentence_patterns = [
-        r'[.!?]+(?=\s+[A-Z])',  # 句号、感叹号、问号后跟大写字母
-        r'[.!?]+\s*\n',         # 句号、感叹号、问号后跟换行
+        r'[.!?]+(?=\s+[A-Z])',  # 句号、感叹号、问号后跟空格和大写字母
         r'[.!?]+\s*$',          # 句号、感叹号、问号在行尾
     ]
     
@@ -138,11 +86,10 @@ def split_text_into_sentences(text: str) -> List[str]:
         if last_sentence:
             sentences.append(last_sentence)
     
-    # 恢复被保护的模式
+    # 恢复小数点
     restored_sentences = []
     for sentence in sentences:
-        for placeholder, original in protected_map.items():
-            sentence = sentence.replace(placeholder, original)
+        sentence = sentence.replace('__DECIMAL__', '.')
         restored_sentences.append(sentence)
     
     # 清理和过滤
@@ -152,4 +99,140 @@ def split_text_into_sentences(text: str) -> List[str]:
         if sentence and len(sentence) > 10:  # 过滤太短的句子
             cleaned_sentences.append(sentence)
     
-    return cleaned_sentences 
+    return cleaned_sentences
+
+
+def estimate_tokens(text: str) -> int:
+    """
+    估算文本的token数量
+    使用简单的估算方法：英文约4个字符1个token，中文约2个字符1个token
+    """
+    if not text:
+        return 0
+    
+    # 分别计算中文字符和英文字符
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    english_chars = len(text) - chinese_chars
+    
+    # 估算token数量 - 更保守的估算
+    estimated_tokens = (english_chars // 3) + (chinese_chars // 1)
+    
+    # 确保至少返回1个token
+    return max(1, estimated_tokens)
+
+
+def split_text_into_chunks(text: str, max_chunk_tokens: int) -> List[str]:
+    """
+    将文本按句子分割成chunks，确保每个chunk不超过指定的token数量
+    
+    Args:
+        text: 要分割的文本
+        max_chunk_tokens: 每个chunk的最大token数量
+    
+    Returns:
+        List[str]: 分割后的chunks列表
+    """
+    if not text or max_chunk_tokens <= 0:
+        return [text] if text else []
+    
+    # 使用智能的句子分割，能够正确处理数字、日期等特殊情况
+    sentences = split_text_into_sentences(text)
+    
+    if not sentences:
+        return [text]
+    
+    chunks = []
+    current_chunk = []
+    current_tokens = 0
+    
+    for sentence in sentences:
+        sentence_tokens = estimate_tokens(sentence)
+        
+        # 如果单个句子就超过了限制，需要特殊处理
+        if sentence_tokens > max_chunk_tokens:
+            # 如果当前chunk不为空，先保存当前chunk
+            if current_chunk:
+                chunks.append(' '.join(current_chunk))
+                current_chunk = []
+                current_tokens = 0
+            
+            # 对于超长的句子，直接作为一个chunk（虽然会超出限制，但保持完整性）
+            chunks.append(sentence)
+            continue
+        
+        # 检查添加这个句子是否会超出限制
+        if current_tokens + sentence_tokens > max_chunk_tokens and current_chunk:
+            # 保存当前chunk
+            chunks.append(' '.join(current_chunk))
+            current_chunk = [sentence]
+            current_tokens = sentence_tokens
+        else:
+            # 添加到当前chunk
+            current_chunk.append(sentence)
+            current_tokens += sentence_tokens
+    
+    # 添加最后一个chunk
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+    
+    return chunks
+
+
+def simple_split_sentences(text: str) -> List[str]:
+    """
+    简单的句子分割，避免复杂的protected模式
+    """
+    # 预处理：标准化换行符和空格
+    text = re.sub(r'\n+', ' ', text)
+    text = re.sub(r' +', ' ', text)
+    
+    # 简单的句子分割模式
+    # 使用句号、感叹号、问号作为句子结束标记，但要注意数字中的小数点
+    sentences = []
+    
+    # 使用正则表达式分割句子，但保护数字中的小数点
+    # 匹配句号、感叹号、问号，但后面必须跟空格和大写字母，或者是行尾
+    pattern = r'[.!?]+(?=\s+[A-Z]|\s*$)'
+    
+    parts = re.split(pattern, text)
+    
+    for i, part in enumerate(parts):
+        part = part.strip()
+        if part:
+            # 如果不是最后一部分，需要加上句号
+            if i < len(parts) - 1:
+                part += '.'
+            sentences.append(part)
+    
+    # 过滤太短的句子
+    filtered_sentences = []
+    for sentence in sentences:
+        if len(sentence.strip()) > 10:  # 过滤太短的句子
+            filtered_sentences.append(sentence.strip())
+    
+    return filtered_sentences
+
+
+def merge_summaries(summaries: List[str]) -> str:
+    """
+    合并多个summary为一个完整的summary
+    
+    Args:
+        summaries: summary列表
+    
+    Returns:
+        str: 合并后的summary
+    """
+    if not summaries:
+        return ""
+    
+    if len(summaries) == 1:
+        return summaries[0]
+    
+    # 简单合并，用换行符分隔
+    merged = "\n\n".join(summaries)
+    
+    # 如果合并后的文本太长，可以进一步处理
+    # 这里可以根据需要添加更复杂的合并逻辑
+    
+    return merged 

@@ -8,6 +8,7 @@ import fcntl
 import random
 from typing import Dict, Any, List
 from utils.llm_api import OpenAILLMApi, DeepSeekLLMApi
+from utils.text_processor import split_text_into_chunks, merge_summaries, estimate_tokens
 
 
 class SingleProcessor:
@@ -26,15 +27,57 @@ class SingleProcessor:
         else:
             return OpenAILLMApi(api_key=config['openai_api_key'])
     
-    def generate_summary(self, text: str) -> str:
-        """生成摘要"""
+    def generate_summary(self, text: str, file_name: str) -> str:
+        """生成摘要，支持自动分块处理"""
         try:
-            llm_api = self._get_llm_api(self.config)
+            # 获取配置
+            max_chunk_tokens = self.config.get('max_chunk_tokens', 20480)
             summary_model = self.config.get('summary_model', 'gpt-4o-mini')
             summary_tokens = self.config.get('summary_max_tokens', 2048)
             summary_temp = self.config.get('summary_temperature', 0.3)
             
-            summary_prompt = f"""Please provide a professional summary of the following financial report text with the following requirements:
+            # 估算原始文本的token数量
+            original_tokens = estimate_tokens(text)
+            # logging.info(f"原始文本估算token数量: {original_tokens}")
+            
+            # 检查是否需要分块
+            if original_tokens <= max_chunk_tokens:
+                # logging.info("文本长度在限制范围内，直接处理")
+                return self._generate_single_summary(text, summary_model, summary_tokens, summary_temp)
+            
+            # 需要分块处理
+            # logging.info(f"文本长度超出限制，进行分块处理 (max_chunk_tokens: {max_chunk_tokens})")
+            chunks = split_text_into_chunks(text, max_chunk_tokens)
+            logging.info(f"文件 {file_name} 已分割为 {len(chunks)} 个chunks")
+            
+            # 对每个chunk生成摘要
+            summaries = []
+            for i, chunk in enumerate(chunks):
+                # chunk_tokens = estimate_tokens(chunk)
+                # logging.info(f"处理chunk {i+1}/{len(chunks)}, 估算token: {chunk_tokens}")
+                
+                chunk_summary = self._generate_single_summary(
+                    chunk, summary_model, summary_tokens, summary_temp
+                )
+                summaries.append(chunk_summary)
+            
+            # 合并所有摘要
+            final_summary = merge_summaries(summaries)
+            # final_summary_tokens = estimate_tokens(final_summary)
+            # logging.info(f"合并后摘要估算token数量: {final_summary_tokens}")
+            
+            return final_summary
+            
+        except Exception as e:
+            logging.error(f"文件 {file_name} 摘要生成失败: {e}")
+            # 抛出特定异常，让main.py处理API失败计数
+            raise RuntimeError(f"文件 {file_name} API调用失败: {e}")
+    
+    def _generate_single_summary(self, text: str, model: str, max_tokens: int, temperature: float) -> str:
+        """生成单个文本块的摘要"""
+        llm_api = self._get_llm_api(self.config)
+        
+        summary_prompt = f"""Please provide a professional summary of the following financial report text with the following requirements:
 1. Preserve all important financial data, numbers, and specific details
 2. Retain key business information, risk factors, and opportunities
 3. Preserve important timelines and events
@@ -46,25 +89,20 @@ Financial Report Text:
 {text}
 
 Please return the summary content directly without adding any additional formatting or explanations."""
-            
-            messages = [
-                {"role": "system", "content": "You are a professional financial analyst specializing in extracting and summarizing key information from financial reports."},
-                {"role": "user", "content": summary_prompt}
-            ]
-            
-            summary = llm_api.chat_completion(
-                messages=messages,
-                model=summary_model,
-                max_tokens=summary_tokens,
-                temperature=summary_temp
-            )
-            
-            return summary
-            
-        except Exception as e:
-            logging.error(f"摘要生成失败: {e}")
-            # 抛出特定异常，让main.py处理API失败计数
-            raise RuntimeError(f"API调用失败: {e}")
+        
+        messages = [
+            {"role": "system", "content": "You are a professional financial analyst specializing in extracting and summarizing key information from financial reports."},
+            {"role": "user", "content": summary_prompt}
+        ]
+        
+        summary = llm_api.chat_completion(
+            messages=messages,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
+        
+        return summary
     
     def generate_qa(self, summary: str) -> List[Dict[str, Any]]:
         """生成QA对"""
@@ -176,7 +214,7 @@ def process_single_file(text: str, file_name: str, config: Dict[str, Any], outpu
     qa_count = 0
     
     # 第一步：生成摘要
-    summary = processor.generate_summary(text)
+    summary = processor.generate_summary(text, file_name)
     
     # 第二步：生成QA
     qa_results = processor.generate_qa(summary)

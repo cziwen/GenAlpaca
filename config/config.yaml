@@ -5,15 +5,16 @@ deepseek_api_key: "${DEEPSEEK_API_KEY}"
 llm_provider: deepseek  # openai 或 deepseek
 
 # 模型设置
-model: "deepseek-reasoner"
-temperature: 0.7
-max_tokens: 4096
+model: "deepseek-chat"
+temperature: 0.8
+max_tokens: 2048
 max_questions: 1
 
 # 摘要设置
-summary_model: "deepseek-reasoner"
+summary_model: "deepseek-chat"
 summary_max_tokens: 2048
 summary_temperature: 0.3
+max_chunk_tokens: 55296  # 每个chunk的最大token数量
 
 # 处理设置
 max_workers: 128  # 线程池大小（I/O密集型任务，可以设置更多线程）
